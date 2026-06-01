@@ -33,9 +33,12 @@ classDiagram
     class OfflineCourseFactory {
         +createCourse(data) OfflineCourse
     }
+    class CourseFactoryRegistry {
+        +getFactory(type) CourseFactory
+    }
     CourseFactory <|.. OnlineCourseFactory
     CourseFactory <|.. OfflineCourseFactory
-
+    CourseFactoryRegistry --> CourseFactory
     %% Course hierarchy
     class Course {
         <<abstract>>
@@ -54,7 +57,6 @@ classDiagram
     }
     Course <|-- OnlineCourse
     Course <|-- OfflineCourse
-
     %% Strategy
     class GradeStrategy {
         <<interface>>
@@ -69,7 +71,6 @@ classDiagram
     GradeStrategy <|.. WeightedGradeStrategy
     GradeStrategy <|.. PassFailGradeStrategy
     Course --> GradeStrategy
-
     %% Observer
     class EventPublisher {
         +subscribe(event, listener)
@@ -88,7 +89,6 @@ classDiagram
     NotificationListener <|.. EmailNotificationListener
     NotificationListener <|.. SmsNotificationListener
     EventPublisher --> NotificationListener
-
     %% Adapter
     class PaymentPort {
         <<interface>>
@@ -104,14 +104,13 @@ classDiagram
     }
     PaymentPort <|.. StripeAdapter
     PaymentPort <|.. PayPalAdapter
-
     %% Application Service
     class CourseRepository {
-    +save(course)
-    +findById(id) Course
+        +save(course)
+        +findById(id) Course
     }
     class CourseService {
-        -factory: CourseFactory
+        -factoryRegistry: CourseFactoryRegistry
         -publisher: EventPublisher
         -payment: PaymentPort
         -courseRepo: CourseRepository
@@ -119,8 +118,8 @@ classDiagram
         +completeCourse(courseId, student, results)
         +purchaseCourse(courseId, userId, amount)
     }
+    CourseService --> CourseFactoryRegistry
     CourseService --> CourseRepository
-    CourseService --> CourseFactory
     CourseService --> EventPublisher
     CourseService --> PaymentPort
     CourseService --> Course
@@ -134,6 +133,7 @@ classDiagram
 |---|---|
 | `CourseFactory` (interface) | Контракт создания курсов |
 | `OnlineCourseFactory`, `OfflineCourseFactory` | Создание конкретного типа курса |
+| `CourseFactoryRegistry` | Возвращает нужную фабрику по типу курса и устраняет необходимость `if/else` |
 | `Course` (abstract) | Базовая сущность курса, хранит список студентов и стратегию оценки |
 | `GradeStrategy` (interface) | Контракт алгоритма расчёта оценки |
 | `WeightedGradeStrategy`, `PassFailGradeStrategy` | Конкретные алгоритмы расчёта |
@@ -149,7 +149,7 @@ classDiagram
 
 ## 4. Паттерны и их роль
 
-**Factory Method** - `CourseFactory` с реализациями `OnlineCourseFactory` / `OfflineCourseFactory`. Убирает `if/else if` по типу курса из `CourseService` и инкапсулирует создание конкретных типов курсов. Добавление нового типа курса - это добавление новой фабрики без изменения существующего кода (OCP)
+**Factory Method** - `CourseFactory` с реализациями `OnlineCourseFactory` / `OfflineCourseFactory` и `CourseFactoryRegistry`, который возвращает нужную фабрику по типу курса. Это убирает `if/else if` по типу курса из `CourseService` и инкапсулирует создание конкретных типов курсов. Добавление нового типа курса - это добавление новой фабрики без изменения существующего кода (OCP)
 
 **Strategy** - `GradeStrategy` с реализациями `WeightedGradeStrategy` / `PassFailGradeStrategy`. Алгоритм расчёта оценки вынесен из `CourseService` и передаётся курсу при создании. Замена алгоритма не затрагивает бизнес-логику
 
@@ -189,7 +189,7 @@ classDiagram
 
 Между сервисом бронирований и сервисом ресторанов вводится очередь сообщений (например, RabbitMQ или Kafka), расположенная в ДЦ1. Сервис бронирований при получении запроса не вызывает сервис ресторанов напрямую, а записывает заявку в очередь и немедленно возвращает пользователю ответ «заявка принята». Отдельный consumer-сервис (в ДЦ1) читает сообщения из очереди и вызывает сервис ресторанов с управляемой скоростью - не превышая его пропускную способность
 
-Аналитики установили, что при равномерной нагрузке сервис ресторанов потреблял бы лишь 20% мощностей. Consumer регулирует темп потребления (rate limiting / throttling), сглаживая пики. Все заявки, поступившие за 10-15 минут пиковой нагрузки, накапливаются в очереди и обрабатываются в течение нескольких часов - укладываясь в допустимые бизнесом 24 часа
+Аналитики установили, что при равномерной нагрузке сервис ресторанов потреблял бы лишь 20% мощностей. Consumer регулирует темп потребления (rate limiting / throttling), сглаживая пики. Таким образом создаётся механизм backpressure: скорость обращений к сервису ресторанов ограничивается и подстраивается под его пропускную способность, предотвращая перегрузку единственного экземпляра сервиса. Все заявки, поступившие за 10-15 минут пиковой нагрузки, накапливаются в очереди и обрабатываются в течение нескольких часов - укладываясь в допустимые бизнесом 24 часа. Использование Outbox pattern позволяет избежать ситуации, когда запись о бронировании сохранилась, а сообщение в очередь не отправилось или наоборот. Использование idempotency key позволяет безопасно обрабатывать повторную доставку сообщений и избегать дублирования бронирований
 
 ### Схема решения
 
